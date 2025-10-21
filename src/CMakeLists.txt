@@ -30,5 +30,3 @@ target_sources(rakhook PRIVATE
     "RakNet/PluginInterface.cpp"
     "RakNet/StringCompressor.cpp"
 )
-
-set_property(TARGET rakhook PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
