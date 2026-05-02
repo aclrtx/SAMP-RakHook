@@ -3,8 +3,6 @@
 
 #include <functional>
 
-#include <cyanide/hook_impl_polyhook.hpp>
-
 #include "RakHook/samp.hpp"
 #include "RakNet/RakClientInterface.h"
 

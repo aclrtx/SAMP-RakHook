@@ -1,3 +1,7 @@
+#include <bit>
+
+#include <kthook/kthook.hpp>
+
 #include "RakHook/rakhook.hpp"
 #include "RakHook/detail.hpp"
 #include "RakHook/offsets.hpp"
@@ -5,29 +9,29 @@
 
 #include "RakNet/PacketEnumerations.h"
 
-#include <polyhook2/Detour/x86Detour.hpp>
-
 #ifndef MAX_ALLOCA_STACK_ALLOCATION
 #define MAX_ALLOCA_STACK_ALLOCATION 1048576
 #endif
+
+using handle_rpc_packet_original_t = bool(__thiscall*)(void*, const char*, int, PlayerID);
 
 hooked_rakclient_interface *hooked_interface = nullptr;
 void                       *rakpeer          = nullptr;
 PlayerID                    gplayerid;
 
-using destroy_ri_t        = void(__cdecl *)(void *);
-using handle_rpc_packet_t = bool(__thiscall *)(void *, const char *, int, PlayerID);
+kthook::kthook_simple<void(__cdecl*)(void*)> destroy_ri_hook;
+kthook::kthook_simple<bool(__fastcall*)(void*, void*, const char*, int, PlayerID)> handle_rpc_hook;
 
 // callbacks
-void destroy_rakclient_interface(destroy_ri_t orig, void *rakclient_interface) {
+void destroy_rakclient_interface(const decltype(destroy_ri_hook)& hook, void *rakclient_interface) {
     if (rakclient_interface == hooked_interface) {
         rakclient_interface = rakhook::orig;
         delete hooked_interface;
     }
-    return orig(rakclient_interface);
+    return hook.call_trampoline(rakclient_interface);
 }
 
-bool handle_rpc_packet(handle_rpc_packet_t orig, void *rp, const char *data, int length, PlayerID playerid) {
+bool handle_rpc_packet(const decltype(handle_rpc_hook)& hook, void *rp, void *edx, const char *data, int length, PlayerID playerid) {
     rakpeer   = rp;
     gplayerid = playerid;
 
@@ -85,11 +89,8 @@ bool handle_rpc_packet(handle_rpc_packet_t orig, void *rp, const char *data, int
     if (bits_data)
         incoming.WriteBits(callback_bs->GetData(), bits_data, false);
 
-    return orig(rp, std::bit_cast<char *>(incoming.GetData()), incoming.GetNumberOfBytesUsed(), playerid);
+    return handle_rpc_hook.call_trampoline(rp, edx, std::bit_cast<char *>(incoming.GetData()), incoming.GetNumberOfBytesUsed(), playerid);
 }
-
-std::unique_ptr<cyanide::polyhook_x86<destroy_ri_t, decltype(&destroy_rakclient_interface)>> destroy_ri_hook;
-std::unique_ptr<cyanide::polyhook_x86<handle_rpc_packet_t, decltype(&handle_rpc_packet)>>    handle_rpc_hook;
 
 bool rakhook::initialize() {
     if (initialized)
@@ -109,17 +110,13 @@ bool rakhook::initialize() {
     hooked_interface     = new hooked_rakclient_interface(orig);
     *rakclient_interface = std::bit_cast<RakClientInterface *>(hooked_interface);
 
-    if (!static_cast<bool>(destroy_ri_hook)) {
-        auto func       = std::bit_cast<destroy_ri_t>(offsets::destroy_interface(true));
-        destroy_ri_hook = std::make_unique<typename decltype(destroy_ri_hook)::element_type>(std::move(func), std::move(&destroy_rakclient_interface));
-    }
-    if (!static_cast<bool>(handle_rpc_hook)) {
-        auto func       = std::bit_cast<handle_rpc_packet_t>(offsets::handle_rpc_packet(true));
-        handle_rpc_hook = std::make_unique<typename decltype(handle_rpc_hook)::element_type>(std::move(func), std::move(&handle_rpc_packet));
-    }
+    destroy_ri_hook.set_cb(&destroy_rakclient_interface);
+    destroy_ri_hook.set_dest(offsets::destroy_interface(true));
+    destroy_ri_hook.install();
 
-    destroy_ri_hook->install();
-    handle_rpc_hook->install();
+    handle_rpc_hook.set_cb(&handle_rpc_packet);
+    handle_rpc_hook.set_dest(offsets::handle_rpc_packet(true));
+    handle_rpc_hook.install();
 
     initialized = true;
     return true;
@@ -163,12 +160,17 @@ bool rakhook::emul_rpc(unsigned char id, RakNet::BitStream &rpc_bs) {
     bs.WriteCompressed<unsigned int>(BYTES_TO_BITS(rpc_bs.GetNumberOfBytesUsed()));
     bs.WriteBits(rpc_bs.GetData(), BYTES_TO_BITS(rpc_bs.GetNumberOfBytesUsed()), false);
 
-    handle_rpc_packet_t handle_rpc;
-    if (handle_rpc_hook && handle_rpc_hook->get_trampoline()) {
-        handle_rpc = std::bit_cast<handle_rpc_packet_t>(handle_rpc_hook->get_trampoline());
-    } else {
-        handle_rpc = std::bit_cast<handle_rpc_packet_t>(offsets::handle_rpc_packet(true));
+    handle_rpc_packet_original_t handle_rpc;
+
+    if (handle_rpc_hook.get_trampoline())
+    {
+        handle_rpc = std::bit_cast<handle_rpc_packet_original_t>(handle_rpc_hook.get_trampoline());
     }
+    else
+    {
+        handle_rpc = std::bit_cast<handle_rpc_packet_original_t>(offsets::handle_rpc_packet(true));
+    }
+
     return handle_rpc(rakpeer, std::bit_cast<char *>(bs.GetData()), bs.GetNumberOfBytesUsed(), gplayerid);
 }
 
