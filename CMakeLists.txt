@@ -11,6 +11,16 @@ endif ()
 option(RAKHOOK_INSTALL "Install targets" ${RAKHOOK_MASTER_PROJECT})
 option(RAKHOOK_EXAMPLE "Build an example" ${RAKHOOK_MASTER_PROJECT})
 
+include(FetchContent)
+
+FetchContent_Declare(
+    kthook
+    GIT_REPOSITORY https://github.com/kin4stat/kthook.git
+    GIT_TAG 4331456543f408c42122ced22144cfb698031266
+)
+
+FetchContent_MakeAvailable(kthook)
+
 add_subdirectory(src)
 
 if (RAKHOOK_INSTALL)
